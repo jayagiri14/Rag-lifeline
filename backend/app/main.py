@@ -9,6 +9,35 @@ from app.embeddings import get_embeddings
 from app.medical_data import get_medical_documents
 
 
+def _normalize_documents(raw_docs):
+    """Convert raw medical documents into dicts with content/metadata.
+
+    The source file is large and may contain items as strings, tuples, or dicts.
+    This normalizer makes sure we always have {"content": str, "metadata": dict}.
+    """
+    normalized = []
+    for doc in raw_docs:
+        if isinstance(doc, dict):
+            content = doc.get("content") or doc.get("text") or ""
+            metadata = doc.get("metadata") or {}
+        elif isinstance(doc, (list, tuple)):
+            content = doc[0] if len(doc) > 0 else ""
+            metadata = doc[1] if len(doc) > 1 and isinstance(doc[1], dict) else {}
+        elif isinstance(doc, str):
+            content = doc
+            metadata = {}
+        else:
+            content = str(doc)
+            metadata = {}
+
+        if not isinstance(metadata, dict):
+            metadata = {"info": str(metadata)}
+
+        if content:
+            normalized.append({"content": str(content), "metadata": metadata})
+    return normalized
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize on startup."""
@@ -21,7 +50,7 @@ async def lifespan(app: FastAPI):
     # Auto-load medical data if collection is empty
     if get_collection_count() == 0:
         print("📚 Loading medical knowledge base...")
-        documents = get_medical_documents()
+        documents = _normalize_documents(get_medical_documents())
         texts = [doc["content"] for doc in documents]
         embeddings = get_embeddings(texts)
         add_documents(documents, embeddings)
@@ -80,7 +109,7 @@ async def query_medical(request: QueryRequest):
 async def reload_medical_data():
     """Reload the medical knowledge base."""
     try:
-        documents = get_medical_documents()
+        documents = _normalize_documents(get_medical_documents())
         texts = [doc["content"] for doc in documents]
         embeddings = get_embeddings(texts)
         count = add_documents(documents, embeddings)
