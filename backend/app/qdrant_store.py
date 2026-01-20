@@ -1,10 +1,19 @@
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from app.config import QDRANT_HOST, QDRANT_PORT, QDRANT_URL, QDRANT_API_KEY, COLLECTION_NAME
+from uuid import uuid4
+from datetime import datetime
+from app.config import (
+    QDRANT_HOST,
+    QDRANT_PORT,
+    QDRANT_URL,
+    QDRANT_API_KEY,
+    COLLECTION_NAME,
+    PATIENT_HISTORY_COLLECTION,
+)
 
 _client = None
 
-# Vector size for bert-base-uncased model
+# Vector size for embeddings
 VECTOR_SIZE = 768
 
 def get_qdrant_client() -> QdrantClient:
@@ -20,21 +29,40 @@ def get_qdrant_client() -> QdrantClient:
     return _client
 
 def ensure_collection_exists():
-    """Create the collection if it doesn't exist."""
+    """Create the collection if it doesn't exist and ensure payload indexes."""
     client = get_qdrant_client()
-    
+
     collections = client.get_collections().collections
     collection_names = [c.name for c in collections]
-    
-    if COLLECTION_NAME not in collection_names:
-        client.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=models.VectorParams(
-                size=VECTOR_SIZE,
-                distance=models.Distance.COSINE
+
+    def _ensure(name: str):
+        if name not in collection_names:
+            client.create_collection(
+                collection_name=name,
+                vectors_config=models.VectorParams(
+                    size=VECTOR_SIZE,
+                    distance=models.Distance.COSINE
+                )
             )
-        )
-        print(f"Created collection: {COLLECTION_NAME}")
+            print(f"Created collection: {name}")
+
+    def _ensure_index(name: str, field: str, schema: models.PayloadSchemaType):
+        try:
+            client.create_payload_index(
+                collection_name=name,
+                field_name=field,
+                field_schema=schema,
+            )
+        except Exception:
+            # Index already exists or cannot be created; ignore so startup proceeds.
+            pass
+
+    _ensure(COLLECTION_NAME)
+    _ensure(PATIENT_HISTORY_COLLECTION)
+
+    # Needed for history filters to avoid Qdrant "index required" errors.
+    _ensure_index(PATIENT_HISTORY_COLLECTION, "metadata.patient_id", models.PayloadSchemaType.KEYWORD)
+    _ensure_index(PATIENT_HISTORY_COLLECTION, "metadata.is_chronic", models.PayloadSchemaType.BOOL)
     return True
 
 def add_documents(documents: list[dict], embeddings: list[list[float]]):
@@ -44,11 +72,11 @@ def add_documents(documents: list[dict], embeddings: list[list[float]]):
     
     points = [
         models.PointStruct(
-            id=i,
+            id=str(uuid4()),
             vector=embedding,
             payload=doc
         )
-        for i, (doc, embedding) in enumerate(zip(documents, embeddings))
+        for doc, embedding in zip(documents, embeddings)
     ]
     
     client.upsert(collection_name=COLLECTION_NAME, points=points)
@@ -72,6 +100,84 @@ def search_similar(query_embedding: list[float], limit: int = 5) -> list[dict]:
         }
         for hit in results
     ]
+
+
+# ---------------- Patient History Helpers -----------------
+
+def add_history_documents(documents: list[dict], embeddings: list[list[float]]):
+    """Add patient history documents to history collection."""
+    client = get_qdrant_client()
+    ensure_collection_exists()
+
+    points = [
+        models.PointStruct(
+            id=str(uuid4()),
+            vector=embedding,
+            payload=doc
+        )
+        for doc, embedding in zip(documents, embeddings)
+    ]
+
+    client.upsert(collection_name=PATIENT_HISTORY_COLLECTION, points=points)
+    return len(points)
+
+
+def search_history(patient_id: str, query_embedding: list[float], limit: int = 8) -> list[dict]:
+    """Search patient history by similarity limited to the patient id."""
+    client = get_qdrant_client()
+
+    results = client.search(
+        collection_name=PATIENT_HISTORY_COLLECTION,
+        query_vector=query_embedding,
+        limit=limit,
+        query_filter=models.Filter(
+            must=[models.FieldCondition(key="metadata.patient_id", match=models.MatchValue(value=patient_id))]
+        ),
+    )
+
+    return [
+        {
+            "content": hit.payload.get("content", ""),
+            "metadata": hit.payload.get("metadata", {}),
+            "score": hit.score,
+        }
+        for hit in results
+    ]
+
+
+def get_chronic_history(patient_id: str, limit: int = 20) -> list[dict]:
+    """Get chronic history entries for a patient (no similarity filter)."""
+    client = get_qdrant_client()
+
+    results = client.search(
+        collection_name=PATIENT_HISTORY_COLLECTION,
+        query_vector=[0.0] * VECTOR_SIZE,
+        limit=limit,
+        query_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="metadata.patient_id", match=models.MatchValue(value=patient_id)),
+                models.FieldCondition(key="metadata.is_chronic", match=models.MatchValue(value=True)),
+            ]
+        ),
+    )
+
+    return [
+        {
+            "content": hit.payload.get("content", ""),
+            "metadata": hit.payload.get("metadata", {}),
+            "score": hit.score,
+        }
+        for hit in results
+    ]
+
+
+def get_history_count() -> int:
+    client = get_qdrant_client()
+    try:
+        info = client.get_collection(PATIENT_HISTORY_COLLECTION)
+        return info.points_count
+    except Exception:
+        return 0
 
 def get_collection_count() -> int:
     """Get the number of documents in the collection."""

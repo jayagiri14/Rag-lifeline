@@ -18,7 +18,7 @@ venv/
 .env.local
 .env.development
 .env.production
-!.env.example
+.env.example
 
 # Node / Vite
 node_modules/

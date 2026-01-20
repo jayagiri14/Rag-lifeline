@@ -15,9 +15,14 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
 
 # Collection name for medical data
 COLLECTION_NAME = "medical_knowledge"
+PATIENT_HISTORY_COLLECTION = "patient_history"
 
 # Embedding model
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # LLM Model (DeepSeek R1 via OpenRouter)
 LLM_MODEL = "deepseek/deepseek-r1"
+
+# History retrieval settings
+HISTORY_RECENT_DAYS = int(os.getenv("HISTORY_RECENT_DAYS", 180))
+HISTORY_TOP_K = int(os.getenv("HISTORY_TOP_K", 6))

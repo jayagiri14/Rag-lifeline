@@ -1,12 +1,27 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from datetime import datetime
 
-from app.models import QueryRequest, QueryResponse, HealthResponse, LoadDataResponse
-from app.rag_chain import query_rag
-from app.qdrant_store import get_qdrant_client, ensure_collection_exists, add_documents, get_collection_count
+from app.models import (
+    QueryRequest,
+    QueryResponse,
+    HealthResponse,
+    LoadDataResponse,
+    PrescriptionUploadResponse,
+    HistoryInsightRequest,
+    HistoryInsightResponse,
+)
+from app.rag_chain import query_rag, ingest_prescription_text, query_history_correlation
+from app.qdrant_store import (
+    get_qdrant_client,
+    ensure_collection_exists,
+    add_documents,
+    get_collection_count,
+)
 from app.embeddings import get_embeddings
 from app.medical_data import get_medical_documents
+from app.ocr_utils import extract_text_from_image, OCRError
 
 
 def _normalize_documents(raw_docs):
@@ -116,6 +131,42 @@ async def reload_medical_data():
         return LoadDataResponse(
             status="success",
             documents_added=count
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/history/prescription", response_model=PrescriptionUploadResponse)
+async def upload_prescription(patient_id: str = Form(...), file: UploadFile = File(...)):
+    """Upload a prescription image, run OCR + structuring, and store in history."""
+    try:
+        file_bytes = await file.read()
+        text, engine = extract_text_from_image(file_bytes)
+        structured, stored = await ingest_prescription_text(patient_id, text)
+        return PrescriptionUploadResponse(
+            status="stored",
+            patient_id=patient_id,
+            stored=stored,
+            engine=engine,
+            structured=structured,
+        )
+    except OCRError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/history/insight", response_model=HistoryInsightResponse)
+async def history_insight(request: HistoryInsightRequest):
+    """Generate history-based medical insight for a patient's symptoms."""
+    try:
+        result = await query_history_correlation(request.patient_id, request.symptoms, request.top_k)
+        return HistoryInsightResponse(
+            insight=result["response"],
+            history_used=result.get("sources", []),
+            model=result.get("model", "unknown"),
+            usage=result.get("usage"),
+            disclaimer="⚠️ This is a history-based insight, not a diagnosis. Consult a clinician.",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

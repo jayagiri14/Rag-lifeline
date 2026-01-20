@@ -19,6 +19,35 @@ export interface QueryResponse {
   };
 }
 
+export interface HistoryInsightSource {
+  summary: string;
+  date?: string;
+  is_chronic: boolean;
+  type?: string;
+  score: number;
+  raw_text?: string;
+}
+
+export interface HistoryInsightResponse {
+  insight: string;
+  history_used: HistoryInsightSource[];
+  model: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  disclaimer: string;
+}
+
+export interface PrescriptionUploadResponse {
+  status: string;
+  patient_id: string;
+  stored: number;
+  engine: string;
+  structured: Record<string, unknown>;
+}
+
 export interface HealthResponse {
   status: string;
   documents_loaded: number;
@@ -40,6 +69,25 @@ export const api = {
 
   async reloadData(): Promise<{ status: string; documents_added: number }> {
     const response = await axios.post(`${API_BASE_URL}/reload-data`);
+    return response.data;
+  },
+
+  async uploadPrescription(patientId: string, file: File): Promise<PrescriptionUploadResponse> {
+    const formData = new FormData();
+    formData.append('patient_id', patientId);
+    formData.append('file', file);
+    const response = await axios.post(`${API_BASE_URL}/history/prescription`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
+  async historyInsight(patientId: string, symptoms: string, topK = 6): Promise<HistoryInsightResponse> {
+    const response = await axios.post(`${API_BASE_URL}/history/insight`, {
+      patient_id: patientId,
+      symptoms,
+      top_k: topK,
+    });
     return response.data;
   }
 };
