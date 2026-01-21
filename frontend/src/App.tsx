@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Send, Loader2, Heart, AlertCircle, RefreshCw, Info, Upload, Stethoscope } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api, QueryResponse, HistoryInsightResponse, PrescriptionUploadResponse } from './api';
@@ -19,6 +19,11 @@ function App() {
   const [historyInsight, setHistoryInsight] = useState<HistoryInsightResponse | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+
+  // Recording state + refs (added)
+  const [recording, setRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     checkBackendHealth();
@@ -84,6 +89,52 @@ function App() {
     "I've been having trouble sleeping for weeks. What should I do?",
     "What causes high blood pressure?",
   ];
+
+  // Recording functions (added)
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        try {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+
+          const res = await api.uploadAudio(patientId.trim(), audioBlob);
+
+          if ((res as any).transcript) {
+            setQuery((res as any).transcript);
+          }
+
+        } catch (err) {
+          console.error('Audio upload failed', err);
+        }
+      };
+
+      recorder.start();
+      setRecording(true);
+    } catch (err) {
+      console.error('Could not start recording', err);
+      setError(err instanceof Error ? err.message : 'Failed to access microphone');
+    }
+  };
+
+  const stopRecording = () => {
+    try {
+      mediaRecorderRef.current?.stop();
+      mediaRecorderRef.current = null;
+      setRecording(false);
+    } catch (err) {
+      console.error('Error stopping recorder', err);
+      setRecording(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -162,23 +213,37 @@ function App() {
                   </button>
                 ))}
               </div>
-              <button
-                type="submit"
-                disabled={loading || !query.trim() || backendStatus === 'offline'}
-                className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2 font-medium transition-colors"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    Ask
-                  </>
-                )}
-              </button>
+
+              <div className="flex gap-2">
+                {/* Record button added */}
+                <button
+                  type="button"
+                  onClick={recording ? stopRecording : startRecording}
+                  className={`px-4 py-2 rounded-lg text-white ${
+                    recording ? 'bg-red-600' : 'bg-green-600'
+                  }`}
+                >
+                  {recording ? 'Stop' : 'Record'}
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={loading || !query.trim() || backendStatus === 'offline'}
+                  className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2 font-medium transition-colors"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      Ask
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </form>
         </div>

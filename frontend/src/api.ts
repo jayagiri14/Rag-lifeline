@@ -48,6 +48,12 @@ export interface PrescriptionUploadResponse {
   structured: Record<string, unknown>;
 }
 
+export interface AudioUploadResponse {
+  status: string;
+  patient_id: string;
+  transcript: string;
+}
+
 export interface HealthResponse {
   status: string;
   documents_loaded: number;
@@ -72,17 +78,43 @@ export const api = {
     return response.data;
   },
 
-  async uploadPrescription(patientId: string, file: File): Promise<PrescriptionUploadResponse> {
+  async uploadPrescription(
+    patientId: string,
+    file: File
+  ): Promise<PrescriptionUploadResponse> {
     const formData = new FormData();
     formData.append('patient_id', patientId);
     formData.append('file', file);
-    const response = await axios.post(`${API_BASE_URL}/history/prescription`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+
+    const response = await axios.post(
+      `${API_BASE_URL}/history/prescription`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
     return response.data;
   },
 
-  async historyInsight(patientId: string, symptoms: string, topK = 6): Promise<HistoryInsightResponse> {
+  async uploadAudio(
+    patientId: string,
+    audio: Blob
+  ): Promise<AudioUploadResponse> {
+    const formData = new FormData();
+    formData.append('patient_id', patientId);
+    formData.append('file', audio, 'audio.webm');
+
+    const response = await axios.post(
+      `${API_BASE_URL}/history/audio`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+    return response.data;
+  },
+
+  async historyInsight(
+    patientId: string,
+    symptoms: string,
+    topK = 6
+  ): Promise<HistoryInsightResponse> {
     const response = await axios.post(`${API_BASE_URL}/history/insight`, {
       patient_id: patientId,
       symptoms,
