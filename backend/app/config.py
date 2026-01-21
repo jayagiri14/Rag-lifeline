@@ -21,8 +21,10 @@ PATIENT_HISTORY_COLLECTION = "patient_history"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # LLM Model (OpenAI OSS via OpenRouter)
-LLM_MODEL = "qwen/qwen3-coder:free"
+LLM_MODEL="google/gemini-2.5-flash"
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    
 # History retrieval settings
 HISTORY_RECENT_DAYS = int(os.getenv("HISTORY_RECENT_DAYS", 180))
 HISTORY_TOP_K = int(os.getenv("HISTORY_TOP_K", 6))

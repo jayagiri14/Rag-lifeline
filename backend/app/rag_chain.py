@@ -375,6 +375,25 @@ async def query_rag(query: str, top_k: int = 3) -> dict:
         print(f"LLM unavailable, falling back to summary: {exc}")
         return _fallback_query_response(query, relevant_docs, exc)
 
+async def ingest_audio_symptom(patient_id: str, transcript: str) -> int:
+    payload = {
+        "content": transcript,
+        "metadata": {
+            "patient_id": patient_id,
+            "type": "audio_symptom",
+            "date": datetime.now(timezone.utc).date().isoformat(),
+            "date_ts": datetime.now(timezone.utc).timestamp(),
+            "raw_text": transcript,
+            "is_chronic": False,
+        },
+    }
+
+    embedding = get_embeddings([transcript])[0]
+    stored = add_history_documents([payload], [embedding])
+    return stored
+
+
+
 
 async def query_history_correlation(patient_id: str, symptoms: str, top_k: int = HISTORY_TOP_K) -> dict:
     """History-aware insight generation."""

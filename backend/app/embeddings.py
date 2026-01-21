@@ -1,49 +1,69 @@
-"""Simple embeddings using TF-IDF as fallback - no external dependencies."""
-from sklearn.feature_extraction.text import TfidfVectorizer
+"""
+PubMed-BERT embeddings for medical text.
+Simple, deterministic wrapper suitable for Qdrant.
+"""
+
+import torch
 import numpy as np
+from transformers import AutoTokenizer, AutoModel
 
-# Initialize the vectorizer
-_vectorizer = None
-_fitted = False
+# Model name
+_MODEL_NAME = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract"
 
-def get_vectorizer():
-    """Get or create the TF-IDF vectorizer."""
-    global _vectorizer
-    if _vectorizer is None:
-        _vectorizer = TfidfVectorizer(max_features=768, stop_words='english')
-    return _vectorizer
+# Lazy-loaded globals
+_tokenizer = None
+_model = None
+_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def fit_vectorizer(texts: list[str]):
-    """Fit the vectorizer on texts."""
-    global _fitted
-    vectorizer = get_vectorizer()
-    vectorizer.fit(texts)
-    _fitted = True
+
+def _load_model():
+    """Load tokenizer and model once."""
+    global _tokenizer, _model
+    if _tokenizer is None or _model is None:
+        _tokenizer = AutoTokenizer.from_pretrained(_MODEL_NAME)
+        _model = AutoModel.from_pretrained(_MODEL_NAME)
+        _model.to(_device)
+        _model.eval()
+
+
+def _mean_pooling(model_output, attention_mask):
+    """Mean pooling with attention mask."""
+    token_embeddings = model_output.last_hidden_state
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    summed = torch.sum(token_embeddings * input_mask_expanded, dim=1)
+    counts = torch.clamp(input_mask_expanded.sum(dim=1), min=1e-9)
+    return summed / counts
+
 
 def get_embeddings(texts: list[str]) -> list[list[float]]:
-    """Generate embeddings for a list of texts using TF-IDF."""
-    global _fitted
-    vectorizer = get_vectorizer()
-    
-    # Fit on first call if not fitted
-    if not _fitted:
-        vectorizer.fit(texts)
-        _fitted = True
-    
-    # Transform texts
-    tfidf_matrix = vectorizer.transform(texts)
-    
-    # Pad or truncate to exact 768 dimensions
-    result = np.zeros((len(texts), 768))
-    actual_features = min(tfidf_matrix.shape[1], 768)
-    result[:, :actual_features] = tfidf_matrix.toarray()[:, :actual_features]
-    
-    # L2 normalize
-    norms = np.linalg.norm(result, axis=1, keepdims=True)
-    norms[norms == 0] = 1  # Avoid division by zero
-    result = result / norms
-    
-    return result.tolist()
+    """
+    Generate PubMed-BERT embeddings for a list of texts.
+    Returns L2-normalized vectors.
+    """
+    _load_model()
+
+    with torch.no_grad():
+        encoded = _tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=512,
+            return_tensors="pt"
+        )
+
+        encoded = {k: v.to(_device) for k, v in encoded.items()}
+        model_output = _model(**encoded)
+
+        embeddings = _mean_pooling(model_output, encoded["attention_mask"])
+        embeddings = embeddings.cpu().numpy()
+
+    # L2 normalize (important for cosine similarity in Qdrant)
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    embeddings = embeddings / norms
+
+    return embeddings.tolist()
+
 
 def get_embedding(text: str) -> list[float]:
     """Generate embedding for a single text."""

@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
+from app.audio_utils import extract_text_from_audio, AudioError
+import traceback
 
 from app.models import (
     QueryRequest,
@@ -12,7 +14,7 @@ from app.models import (
     HistoryInsightRequest,
     HistoryInsightResponse,
 )
-from app.rag_chain import query_rag, ingest_prescription_text, query_history_correlation
+from app.rag_chain import query_rag, ingest_prescription_text,ingest_audio_symptom, query_history_correlation
 from app.qdrant_store import (
     get_qdrant_client,
     ensure_collection_exists,
@@ -170,6 +172,32 @@ async def history_insight(request: HistoryInsightRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/history/audio")
+async def upload_audio_description(
+    patient_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    try:
+        audio_bytes = await file.read()
+
+        transcript = await extract_text_from_audio(audio_bytes)
+        print("TRANSCRIPT:", transcript)
+
+        stored = await ingest_audio_symptom(patient_id, transcript)
+
+        return {
+            "status": "stored",
+            "patient_id": patient_id,
+            "stored": stored,
+            "engine": "whisper",
+            "transcript": transcript,
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 if __name__ == "__main__":
