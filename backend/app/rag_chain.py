@@ -85,6 +85,47 @@ Please provide a helpful, informative response based on the knowledge above. Rem
         }
 
 
+def _format_sources(docs: list[dict]) -> list[dict]:
+    return [
+        {
+            "content": doc["content"][:200] + "...",
+            "condition": doc.get("metadata", {}).get("condition", "Unknown"),
+            "relevance_score": doc.get("score"),
+        }
+        for doc in docs
+    ]
+
+
+def _fallback_query_response(query: str, docs: list[dict], reason: Exception) -> dict:
+    reason_text = str(reason).strip().replace("\n", " ")
+    if len(reason_text) > 200:
+        reason_text = reason_text[:200] + "..."
+
+    if docs:
+        summary_lines = []
+        for idx, doc in enumerate(docs, start=1):
+            snippet = doc["content"].replace("\n", " ")[:220]
+            condition = doc.get("metadata", {}).get("condition", "general context")
+            summary_lines.append(f"{idx}. {snippet} (context: {condition})")
+        summary = "\n".join(summary_lines)
+    else:
+        summary = "No supporting documents were retrieved for this question."
+
+    response = "\n\n".join([
+        "The cloud reasoning model is temporarily unavailable, so I'm sharing a direct summary of the closest medical references instead.",
+        f"Reason: {reason_text or 'LLM service unavailable.'}",
+        summary,
+        "Please regard this as informational only and verify with a clinician.",
+    ])
+
+    return {
+        "response": response,
+        "sources": _format_sources(docs),
+        "model": "local-fallback",
+        "usage": {"error": reason_text or "llm_unavailable"},
+    }
+
+
 # ---------------- Prescription Structuring -----------------
 
 STRUCTURE_SYSTEM_PROMPT = """You are a medical scribe. Extract a minimal JSON summary from a prescription note.
@@ -321,22 +362,18 @@ async def query_rag(query: str, top_k: int = 3) -> dict:
             "model": LLM_MODEL
         }
     
-    # Step 3: Generate response using LLM
-    llm_result = await generate_response(query, relevant_docs)
-    
-    return {
-        "response": llm_result["response"],
-        "sources": [
-            {
-                "content": doc["content"][:200] + "...",
-                "condition": doc["metadata"].get("condition", "Unknown"),
-                "relevance_score": doc["score"]
-            }
-            for doc in relevant_docs
-        ],
-        "model": llm_result["model"],
-        "usage": llm_result.get("usage", {})
-    }
+    # Step 3: Generate response using LLM, fall back gracefully if unavailable
+    try:
+        llm_result = await generate_response(query, relevant_docs)
+        return {
+            "response": llm_result["response"],
+            "sources": _format_sources(relevant_docs),
+            "model": llm_result["model"],
+            "usage": llm_result.get("usage", {}),
+        }
+    except Exception as exc:
+        print(f"LLM unavailable, falling back to summary: {exc}")
+        return _fallback_query_response(query, relevant_docs, exc)
 
 
 async def query_history_correlation(patient_id: str, symptoms: str, top_k: int = HISTORY_TOP_K) -> dict:

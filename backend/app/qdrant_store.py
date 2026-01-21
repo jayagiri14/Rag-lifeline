@@ -86,10 +86,10 @@ def search_similar(query_embedding: list[float], limit: int = 5) -> list[dict]:
     """Search for similar documents."""
     client = get_qdrant_client()
     
-    results = client.search(
+    results = client.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_embedding,
-        limit=limit
+        query=query_embedding,
+        limit=limit,
     )
     
     return [
@@ -98,7 +98,7 @@ def search_similar(query_embedding: list[float], limit: int = 5) -> list[dict]:
             "metadata": hit.payload.get("metadata", {}),
             "score": hit.score
         }
-        for hit in results
+        for hit in results.points
     ]
 
 
@@ -126,9 +126,9 @@ def search_history(patient_id: str, query_embedding: list[float], limit: int = 8
     """Search patient history by similarity limited to the patient id."""
     client = get_qdrant_client()
 
-    results = client.search(
+    results = client.query_points(
         collection_name=PATIENT_HISTORY_COLLECTION,
-        query_vector=query_embedding,
+        query=query_embedding,
         limit=limit,
         query_filter=models.Filter(
             must=[models.FieldCondition(key="metadata.patient_id", match=models.MatchValue(value=patient_id))]
@@ -141,7 +141,7 @@ def search_history(patient_id: str, query_embedding: list[float], limit: int = 8
             "metadata": hit.payload.get("metadata", {}),
             "score": hit.score,
         }
-        for hit in results
+        for hit in results.points
     ]
 
 
@@ -149,9 +149,9 @@ def get_chronic_history(patient_id: str, limit: int = 20) -> list[dict]:
     """Get chronic history entries for a patient (no similarity filter)."""
     client = get_qdrant_client()
 
-    results = client.search(
+    results = client.query_points(
         collection_name=PATIENT_HISTORY_COLLECTION,
-        query_vector=[0.0] * VECTOR_SIZE,
+        query=[0.0] * VECTOR_SIZE,
         limit=limit,
         query_filter=models.Filter(
             must=[
@@ -167,7 +167,7 @@ def get_chronic_history(patient_id: str, limit: int = 20) -> list[dict]:
             "metadata": hit.payload.get("metadata", {}),
             "score": hit.score,
         }
-        for hit in results
+        for hit in results.points
     ]
 
 

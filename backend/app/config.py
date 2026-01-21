@@ -20,8 +20,8 @@ PATIENT_HISTORY_COLLECTION = "patient_history"
 # Embedding model
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# LLM Model (DeepSeek R1 via OpenRouter)
-LLM_MODEL = "deepseek/deepseek-r1"
+# LLM Model (OpenAI OSS via OpenRouter)
+LLM_MODEL = "qwen/qwen3-coder:free"
 
 # History retrieval settings
 HISTORY_RECENT_DAYS = int(os.getenv("HISTORY_RECENT_DAYS", 180))
