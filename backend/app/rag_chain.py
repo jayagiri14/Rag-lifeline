@@ -17,36 +17,55 @@ from app.qdrant_store import (
     add_history_documents,
 )
 
-SYSTEM_PROMPT = """You are a helpful medical assistant AI. Your role is to provide information about symptoms, conditions, and general health advice based on the medical knowledge provided to you.
+# ================= SYSTEM PROMPT (FIXED) =================
 
-Important guidelines:
-1. Always base your answers on the provided context/knowledge.
-2. Be empathetic and clear in your responses.
-3. Always recommend consulting a healthcare professional for proper diagnosis and treatment.
-4. Never provide definitive diagnoses - only suggest possibilities.
-5. If you don't have enough information, say so clearly.
-6. Mention when symptoms require urgent medical attention.
+SYSTEM_PROMPT = """You are a medical information assistant.
 
-Remember: You are providing general health information, not medical advice. Always encourage users to seek professional medical care."""
+KNOWLEDGE CONTROL (STRICT):
+- Medical facts, diseases, conditions, and treatments MUST come only from the provided medical knowledge.
+- Do NOT introduce new medical facts, conditions, or treatments that are not present in the context.
 
+REASONING PERMITTED:
+- You MAY use general medical reasoning to explain, summarize, or connect the provided information.
+- You MAY interpret symptoms and describe possible associations,
+  but you must NOT introduce new factual medical claims.
+
+SAFETY:
+- Do NOT provide diagnoses or treatment advice.
+- If information is incomplete, explain what can and cannot be determined.
+- Be empathetic and cautious.
+
+You are not a doctor. Encourage consulting a healthcare professional when appropriate.
+"""
+
+# ================= MAIN RAG RESPONSE =================
 
 async def generate_response(query: str, context: list[dict]) -> dict:
     """Generate a response using OpenRouter DeepSeek R1."""
-    
-    # Format context for the prompt
+
     context_text = "\n\n".join([
         f"--- Medical Information ---\n{doc['content']}"
         for doc in context
     ])
-    
-    user_message = f"""Based on the following medical knowledge, please help answer the user's question.
+
+    user_message = f"""
+You are given medical reference information and a user's question.
+
+GUIDELINES:
+- Base your answer primarily on the medical knowledge below.
+- You may apply general medical reasoning to interpret or clarify the information.
+- Do NOT introduce new medical facts, diseases, or treatments not supported by the text.
+- Do NOT provide a diagnosis or treatment plan.
+- If some details are missing, state the uncertainty clearly instead of refusing.
 
 MEDICAL KNOWLEDGE:
 {context_text}
 
-USER'S QUESTION: {query}
+USER QUESTION:
+{query}
 
-Please provide a helpful, informative response based on the knowledge above. Remember to recommend consulting a healthcare professional."""
+Answer clearly, empathetically, and cautiously.
+"""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -54,29 +73,29 @@ Please provide a helpful, informative response based on the knowledge above. Rem
         "HTTP-Referer": "http://localhost:3000",
         "X-Title": "Medical RAG Assistant"
     }
-    
+
     payload = {
         "model": LLM_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message}
         ],
-        "temperature": 0.7,
+        "temperature": 0.3,
         "max_tokens": 1500
     }
-    
+
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
             headers=headers,
             json=payload
         )
-        
+
         if response.status_code != 200:
             error_detail = response.text
-            print(f"OpenRouter API Error: {response.status_code} - {error_detail}")
             raise Exception(f"OpenRouter API error: {response.status_code} - {error_detail}")
-        
+
         result = response.json()
         return {
             "response": result["choices"][0]["message"]["content"],
@@ -84,6 +103,8 @@ Please provide a helpful, informative response based on the knowledge above. Rem
             "usage": result.get("usage", {})
         }
 
+
+# ================= SOURCE HELPERS =================
 
 def _format_sources(docs: list[dict]) -> list[dict]:
     return [
@@ -126,7 +147,7 @@ def _fallback_query_response(query: str, docs: list[dict], reason: Exception) ->
     }
 
 
-# ---------------- Prescription Structuring -----------------
+# ================= PRESCRIPTION STRUCTURING =================
 
 STRUCTURE_SYSTEM_PROMPT = """You are a medical scribe. Extract a minimal JSON summary from a prescription note.
 Fields:
@@ -136,11 +157,11 @@ Fields:
 - date: ISO date string if present, else null
 - doctor_notes: brief free-text notes if present
 - raw_text: original text echoed back
-Return ONLY JSON."""
+Return ONLY JSON.
+"""
 
 
 async def structure_prescription_text(raw_text: str) -> dict:
-    """Use the LLM to structure prescription text into a JSON record."""
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -172,16 +193,17 @@ async def structure_prescription_text(raw_text: str) -> dict:
         result = response.json()
         content = result["choices"][0]["message"]["content"]
         structured = json.loads(content)
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:
         raise Exception(f"Failed to parse LLM structuring output: {exc}") from exc
 
-    # Normalize
     structured.setdefault("diagnosis", [])
     structured.setdefault("medicines", [])
     structured.setdefault("is_chronic", False)
     structured.setdefault("raw_text", raw_text)
     return structured
 
+
+# ================= HISTORY HELPERS =================
 
 def _build_history_payload(patient_id: str, structured: dict, raw_text: str) -> dict:
     date_str = structured.get("date") or datetime.now(timezone.utc).date().isoformat()
@@ -269,13 +291,34 @@ def _fallback_history_message(symptoms: str, items: list[dict], reason: Optional
     ])
 
 
+# ================= HISTORY INSIGHT PROMPT (FIXED) =================
+
 HISTORY_INSIGHT_PROMPT = """You are a medical reasoning assistant.
-Use the patient's past medical history and current symptoms to highlight possible correlations and risk factors.
-- Do NOT provide definitive diagnoses.
-- Emphasize how chronic diseases interact with current symptoms.
-- If evidence is weak, say so clearly.
-- Include a brief disclaimer.
-Return concise paragraphs.
+
+KNOWLEDGE CONTROL:
+- Medical facts, diseases, and confirmed conditions MUST come only from the provided patient history.
+- Do NOT introduce new medical facts beyond the provided information.
+
+REASONING PERMITTED:
+- You MAY use general medical reasoning to interpret symptoms.
+- You MAY identify symptom patterns and possible associations with past history.
+- Associations MUST be labeled as uncertain unless explicitly confirmed.
+
+RESTRICTIONS:
+- Do NOT provide diagnoses or treatment advice.
+- Do NOT state certainty without explicit evidence.
+
+TASK:
+1. List observed facts from the history and symptoms.
+2. Describe possible associations using cautious language.
+3. Label evidence strength as strong, moderate, or weak.
+4. Explicitly state uncertainties and missing information.
+
+STYLE:
+- Clinical, cautious, and non-alarmist.
+- Use phrases like "may be associated", "could be related", "cannot be determined with certainty".
+
+End with a brief disclaimer encouraging clinical review.
 """
 
 
@@ -338,6 +381,8 @@ Provide a history-based medical insight (not a diagnosis)."""
         }
 
 
+# ================= INGESTION & QUERY =================
+
 async def ingest_prescription_text(patient_id: str, raw_text: str) -> Tuple[dict, int]:
     structured = await structure_prescription_text(raw_text)
     payload = _build_history_payload(patient_id, structured, raw_text)
@@ -347,22 +392,16 @@ async def ingest_prescription_text(patient_id: str, raw_text: str) -> Tuple[dict
 
 
 async def query_rag(query: str, top_k: int = 3) -> dict:
-    """Main RAG function: retrieve relevant docs and generate response."""
-    
-    # Step 1: Generate embedding for the query
     query_embedding = get_embedding(query)
-    
-    # Step 2: Search for relevant documents
     relevant_docs = search_similar(query_embedding, limit=top_k)
-    
+
     if not relevant_docs:
         return {
             "response": "I don't have enough medical information to answer your question. Please consult a healthcare professional.",
             "sources": [],
             "model": LLM_MODEL
         }
-    
-    # Step 3: Generate response using LLM, fall back gracefully if unavailable
+
     try:
         llm_result = await generate_response(query, relevant_docs)
         return {
@@ -372,8 +411,8 @@ async def query_rag(query: str, top_k: int = 3) -> dict:
             "usage": llm_result.get("usage", {}),
         }
     except Exception as exc:
-        print(f"LLM unavailable, falling back to summary: {exc}")
         return _fallback_query_response(query, relevant_docs, exc)
+
 
 async def ingest_audio_symptom(patient_id: str, transcript: str) -> int:
     payload = {
@@ -393,10 +432,7 @@ async def ingest_audio_symptom(patient_id: str, transcript: str) -> int:
     return stored
 
 
-
-
 async def query_history_correlation(patient_id: str, symptoms: str, top_k: int = HISTORY_TOP_K) -> dict:
-    """History-aware insight generation."""
     symptom_embedding = get_embedding(symptoms)
 
     similar = search_history(patient_id, symptom_embedding, limit=top_k + 4)
