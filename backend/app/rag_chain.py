@@ -185,16 +185,32 @@ async def structure_prescription_text(raw_text: str) -> dict:
             headers=headers,
             json=payload,
         )
+    # print("STRUCTURE RESPONSE STATUS:", response.status_code)
 
     if response.status_code != 200:
         raise Exception(f"OpenRouter API error: {response.status_code} - {response.text}")
 
+    import re
+
     try:
         result = response.json()
-        content = result["choices"][0]["message"]["content"]
+        content = result["choices"][0]["message"]["content"].strip()
+
+        # Remove markdown fences if present
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?|```$", "", content, flags=re.MULTILINE).strip()
+
         structured = json.loads(content)
+
+    except json.JSONDecodeError as exc:
+        raise Exception(
+            f"LLM returned non-JSON output.\nRaw content:\n{content}"
+        ) from exc
     except Exception as exc:
         raise Exception(f"Failed to parse LLM structuring output: {exc}") from exc
+
+    
+    # print("STRUCTURED DATA RAW:", structured)
 
     structured.setdefault("diagnosis", [])
     structured.setdefault("medicines", [])
@@ -384,6 +400,7 @@ Provide a history-based medical insight (not a diagnosis)."""
 # ================= INGESTION & QUERY =================
 
 async def ingest_prescription_text(patient_id: str, raw_text: str) -> Tuple[dict, int]:
+    print(raw_text)
     structured = await structure_prescription_text(raw_text)
     payload = _build_history_payload(patient_id, structured, raw_text)
     embedding = get_embeddings([payload["content"]])[0]
