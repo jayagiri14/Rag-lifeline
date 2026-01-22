@@ -85,9 +85,7 @@ function App() {
 
   const exampleQueries = [
     "I have a runny nose, sneezing, and mild fever. What could it be?",
-    "What are the symptoms of a migraine?",
-    "I've been having trouble sleeping for weeks. What should I do?",
-    "What causes high blood pressure?",
+    "I have sudden weakness after travel with a swollen leg why this happen?",
   ];
 
   // Recording functions (added)
@@ -147,7 +145,6 @@ function App() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-gray-800">Medical RAG Assistant</h1>
-              <p className="text-sm text-gray-500">Powered by DeepSeek R1</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -158,7 +155,7 @@ function App() {
                 ? 'bg-red-100 text-red-700'
                 : 'bg-yellow-100 text-yellow-700'
             }`}>
-              {backendStatus === 'online' ? `✓ ${docsLoaded} docs loaded` : 
+              {backendStatus === 'online' ? `Backend Online` : 
                backendStatus === 'offline' ? '✗ Backend offline' : 
                '⋯ Checking...'}
             </span>
@@ -253,7 +250,6 @@ function App() {
           <div className="flex items-center gap-2 mb-4">
             <Stethoscope className="w-5 h-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-gray-800">History-Based Medical Insight</h2>
-            <span className="text-xs text-gray-500">(separate from general response)</span>
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
@@ -382,36 +378,6 @@ function App() {
                 <ReactMarkdown>{response.response}</ReactMarkdown>
               </div>
             </div>
-
-            {/* Sources */}
-            {response.sources && response.sources.length > 0 && (
-              <div className="border-t border-gray-100 bg-gray-50 p-6">
-                <h3 className="text-sm font-semibold text-gray-600 mb-3">
-                  Related Conditions ({response.sources.length})
-                </h3>
-                <div className="grid gap-3">
-                  {response.sources.map((source, idx) => (
-                    <div key={idx} className="bg-white rounded-lg p-3 border border-gray-200">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-medium text-blue-700">{source.condition}</span>
-                        <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                          {(source.relevance_score * 100).toFixed(0)}% match
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-600 line-clamp-2">{source.content}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Model Info */}
-            <div className="border-t border-gray-100 px-6 py-3 bg-gray-50 flex items-center justify-between text-xs text-gray-500">
-              <span>Model: {response.model}</span>
-              {response.usage && (
-                <span>Tokens: {response.usage.total_tokens || 'N/A'}</span>
-              )}
-            </div>
           </div>
         )}
 
@@ -428,15 +394,7 @@ function App() {
               Describe what you're experiencing and get helpful medical information
             </p>
             <div className="flex flex-wrap justify-center gap-2">
-              {exampleQueries.map((eq, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => setQuery(eq)}
-                  className="text-sm px-4 py-2 bg-white border border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-gray-700 rounded-lg transition-colors"
-                >
-                  {eq}
-                </button>
-              ))}
+              
             </div>
           </div>
         )}
@@ -444,7 +402,7 @@ function App() {
 
       {/* Footer */}
       <footer className="text-center py-6 text-sm text-gray-500">
-        <p>Medical RAG System • Using Qdrant + LangChain + DeepSeek R1</p>
+        <p>Medical RAG System • Using Qdrant</p>
       </footer>
     </div>
   );
