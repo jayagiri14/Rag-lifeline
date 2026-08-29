@@ -22,6 +22,8 @@ Rag-lifeline/
 │  │  ├─ models.py          # Pydantic schemas
 │  │  ├─ audio_utils.py     # Groq Whisper transcription
 │  │  └─ ocr_utils.py       # pytesseract helpers
+│  ├─ tests/                # pytest suite (mocked model + LLM calls)
+│  ├─ eval/                 # retrieval quality benchmark (recall@k, MRR)
 │  ├─ requirements.txt
 │  └─ run.py                # uvicorn wrapper
 ├─ frontend/
@@ -127,9 +129,45 @@ curl -X POST http://localhost:8000/history/insight \
 
 ## Customization
 - **Add more medical knowledge**: Append new dict entries to `backend/app/medical_data.py`, each containing `content` and `metadata`. Run `/reload-data` or restart the backend to embed them.
-- **Switch embedding models**: Update `backend/app/embeddings.py` to load a different Hugging Face checkpoint (make sure `VECTOR_SIZE` in `qdrant_store.py` matches).
+- **Switch embedding models**: Update `_MODEL_NAME` in `backend/app/embeddings.py` to load a different Hugging Face checkpoint (make sure `VECTOR_SIZE` in `qdrant_store.py` matches the new model's dimension). Benchmark first with `eval/retrieval_eval.py` — see the Retrieval Evaluation section below for why the current model was chosen.
 - **Try other LLMs**: Set `LLM_MODEL` in `.env` to any OpenRouter-supported model. Adjust `rag_chain.py` prompts if needed.
 - **Persist Qdrant**: Point to a remote Qdrant cluster when you no longer want in-memory storage.
+
+## Testing
+```bash
+cd backend
+pip install -r requirements.txt
+pytest
+```
+Tests mock the embedding model and OpenRouter calls, so they run in seconds without a GPU, network access, or an API key. They cover the FastAPI endpoints (including the graceful LLM-failure fallback path), the Qdrant helper functions, and a regression test for the corpus-flattening fix described below.
+
+## Retrieval Evaluation
+`eval/retrieval_eval.py` benchmarks retrieval quality: for a sample of medical Q&A pairs, it embeds the question and checks whether the matching answer is recovered out of same-domain distractors, reporting Recall@1/3/5 and MRR.
+```bash
+cd backend
+python -m eval.retrieval_eval --n 300
+```
+Results are written to `backend/eval/results.json` and printed as a markdown table. See the script's docstring for the benchmark's limitations (it's a closed-world eval over the corpus's own Q&A pairs, not independently authored paraphrases).
+
+### Results (n=300, seed=42)
+
+| model | recall@1 | recall@3 | recall@5 | mrr | embed time (300 texts, CPU) |
+| --- | --- | --- | --- | --- | --- |
+| PubMedBERT (raw, masked-LM only) | 0.597 | 0.717 | 0.770 | 0.674 | 69.0s |
+| **PubMedBERT-MSMARCO (used in this app)** | **0.847** | **0.923** | **0.943** | **0.889** | 36.0s |
+| all-MiniLM-L6-v2 (general-purpose) | 0.937 | 0.973 | 0.983 | 0.958 | 5.3s |
+
+**Model choice: `pritamdeka/S-PubMedBert-MS-MARCO`.** Three candidates were benchmarked:
+- Raw PubMedBERT (the original choice) scored worst despite being domain-specific — it was pretrained only with masked-language-modeling on PubMed abstracts, never with a similarity/retrieval objective, so mean-pooling its token embeddings produces a mediocre sentence-embedding space.
+- All-MiniLM-L6-v2, a general-purpose sentence-similarity model, actually scored *highest* on this benchmark and is ~7x faster — because it was explicitly trained for retrieval, and this corpus's phrasing (exam-style Q&A) is closer to general English than dense biomedical-literature text.
+- PubMedBERT-MSMARCO — PubMedBERT's biomedical vocabulary with MS MARCO retrieval fine-tuning layered on top — lands between the two: a clear improvement over raw PubMedBERT (+0.25 recall@1) and only ~0.09 recall@1 behind MiniLM. We chose it over the higher-scoring MiniLM to keep medically-tuned representations for this domain, since the app's queries will include real symptom/diagnosis terminology not well represented in this exam-style benchmark. This is a deliberate quality/domain-fit tradeoff, not a claim that it's the highest-scoring option on this specific benchmark.
+
+## Known Limitations & Roadmap
+- **In-memory vector store**: Qdrant runs with `:memory:` by default, so both the medical knowledge base and all patient history are wiped on every backend restart. Point `QDRANT_URL`/`QDRANT_API_KEY` at a real Qdrant instance for anything beyond a local demo.
+- **Corpus size is capped for dev speed**: the full medical corpus is ~19.7k Q&A pairs; embedding all of them on CPU at startup is slow, so `MAX_MEDICAL_DOCS` (default 1500) caps what gets loaded. Raise it (or remove the cap) for a full-corpus run — expect startup to take significantly longer without a GPU.
+- **No authentication**: all endpoints, including patient history write endpoints, are open, and CORS allows any origin. `patient_id` is caller-supplied and unverified. Do not point this at real patient data as-is.
+- **No automated retrieval quality tracking in CI**: `eval/retrieval_eval.py` is a manual benchmark, not wired into a pipeline; there's no regression alarm if a future change degrades retrieval quality.
+- **Benchmark is a closed-world, exam-style eval**: the retrieval numbers above measure recovery of the corpus's own Q&A pairs, not independently authored paraphrased symptom queries — real user queries may perform differently than this benchmark suggests.
 
 ## Troubleshooting
 - `Missing OPENROUTER_API_KEY`: RAG responses will fall back to static summaries; add the key to `.env`.

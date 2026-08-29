@@ -1,5 +1,6 @@
 import httpx
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Tuple, Optional
 from app.config import (
@@ -16,6 +17,8 @@ from app.qdrant_store import (
     get_chronic_history,
     add_history_documents,
 )
+
+logger = logging.getLogger("medical_rag")
 
 # ================= SYSTEM PROMPT (FIXED) =================
 
@@ -185,7 +188,7 @@ async def structure_prescription_text(raw_text: str) -> dict:
             headers=headers,
             json=payload,
         )
-    # print("STRUCTURE RESPONSE STATUS:", response.status_code)
+    logger.debug("Structure endpoint status: %s", response.status_code)
 
     if response.status_code != 200:
         raise Exception(f"OpenRouter API error: {response.status_code} - {response.text}")
@@ -201,7 +204,6 @@ async def structure_prescription_text(raw_text: str) -> dict:
             content = re.sub(r"^```(?:json)?|```$", "", content, flags=re.MULTILINE).strip()
 
         structured = json.loads(content)
-
     except json.JSONDecodeError as exc:
         raise Exception(
             f"LLM returned non-JSON output.\nRaw content:\n{content}"
@@ -209,8 +211,7 @@ async def structure_prescription_text(raw_text: str) -> dict:
     except Exception as exc:
         raise Exception(f"Failed to parse LLM structuring output: {exc}") from exc
 
-    
-    # print("STRUCTURED DATA RAW:", structured)
+    logger.debug("Structured prescription data: %s", structured)
 
     structured.setdefault("diagnosis", [])
     structured.setdefault("medicines", [])
@@ -400,7 +401,7 @@ Provide a history-based medical insight (not a diagnosis)."""
 # ================= INGESTION & QUERY =================
 
 async def ingest_prescription_text(patient_id: str, raw_text: str) -> Tuple[dict, int]:
-    print(raw_text)
+    logger.debug("Raw prescription text for patient %s: %s", patient_id, raw_text)
     structured = await structure_prescription_text(raw_text)
     payload = _build_history_payload(patient_id, structured, raw_text)
     embedding = get_embeddings([payload["content"]])[0]
@@ -455,7 +456,12 @@ async def query_history_correlation(patient_id: str, symptoms: str, top_k: int =
     similar = search_history(patient_id, symptom_embedding, limit=top_k + 4)
     chronic = get_chronic_history(patient_id)
 
-    combined = similar + [item for item in chronic if item not in similar]
+    def _identity(item: dict) -> tuple:
+        meta = item.get("metadata", {})
+        return (item.get("content"), meta.get("date"), meta.get("raw_text"))
+
+    seen = {_identity(item) for item in similar}
+    combined = similar + [item for item in chronic if _identity(item) not in seen]
     if not combined:
         return {
             "response": "No prior history found for this patient to correlate with current symptoms.",

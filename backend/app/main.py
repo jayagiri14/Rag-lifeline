@@ -1,9 +1,13 @@
+import logging
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
 from app.audio_utils import extract_text_from_audio, AudioError
-import traceback
+from app.config import MAX_MEDICAL_DOCS
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("medical_rag")
 
 from app.models import (
     QueryRequest,
@@ -26,55 +30,26 @@ from app.medical_data import get_medical_documents
 from app.ocr_utils import extract_text_from_image, OCRError
 
 
-def _normalize_documents(raw_docs):
-    """Convert raw medical documents into dicts with content/metadata.
-
-    The source file is large and may contain items as strings, tuples, or dicts.
-    This normalizer makes sure we always have {"content": str, "metadata": dict}.
-    """
-    normalized = []
-    for doc in raw_docs:
-        if isinstance(doc, dict):
-            content = doc.get("content") or doc.get("text") or ""
-            metadata = doc.get("metadata") or {}
-        elif isinstance(doc, (list, tuple)):
-            content = doc[0] if len(doc) > 0 else ""
-            metadata = doc[1] if len(doc) > 1 and isinstance(doc[1], dict) else {}
-        elif isinstance(doc, str):
-            content = doc
-            metadata = {}
-        else:
-            content = str(doc)
-            metadata = {}
-
-        if not isinstance(metadata, dict):
-            metadata = {"info": str(metadata)}
-
-        if content:
-            normalized.append({"content": str(content), "metadata": metadata})
-    return normalized
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize on startup."""
-    print("🚀 Starting Medical RAG System...")
-    
+    logger.info("Starting Medical RAG System...")
+
     # Initialize Qdrant (in-memory)
     get_qdrant_client()
     ensure_collection_exists()
-    
+
     # Auto-load medical data if collection is empty
     if get_collection_count() == 0:
-        print("📚 Loading medical knowledge base...")
-        documents = _normalize_documents(get_medical_documents())
+        logger.info("Loading medical knowledge base (max %d documents)...", MAX_MEDICAL_DOCS)
+        documents = get_medical_documents(limit=MAX_MEDICAL_DOCS)
         texts = [doc["content"] for doc in documents]
         embeddings = get_embeddings(texts)
         add_documents(documents, embeddings)
-        print(f"✅ Loaded {len(documents)} medical documents")
-    
+        logger.info("Loaded %d medical documents", len(documents))
+
     yield
-    print("👋 Shutting down Medical RAG System...")
+    logger.info("Shutting down Medical RAG System...")
 
 
 app = FastAPI(
@@ -126,7 +101,7 @@ async def query_medical(request: QueryRequest):
 async def reload_medical_data():
     """Reload the medical knowledge base."""
     try:
-        documents = _normalize_documents(get_medical_documents())
+        documents = get_medical_documents(limit=MAX_MEDICAL_DOCS)
         texts = [doc["content"] for doc in documents]
         embeddings = get_embeddings(texts)
         count = add_documents(documents, embeddings)
@@ -182,7 +157,7 @@ async def upload_audio_description(
         audio_bytes = await file.read()
 
         transcript = await extract_text_from_audio(audio_bytes)
-        print("TRANSCRIPT:", transcript)
+        logger.info("Audio transcript for patient %s: %s", patient_id, transcript)
 
         stored = await ingest_audio_symptom(patient_id, transcript)
 
@@ -195,7 +170,7 @@ async def upload_audio_description(
         }
 
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("Audio history ingestion failed for patient %s", patient_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
